@@ -78,7 +78,7 @@ def compute_saliency(session, img_array):
     pred_class = int(np.argmax(base_pred))
     base_score = base_pred[pred_class]
 
-    h, w = 224, 224
+    h, w = 240, 240
     saliency = np.zeros((h, w))
 
     for y in range(0, h, 28):
@@ -143,7 +143,7 @@ with col1:
 with col2:
     if uploaded_file:
         # preprocessing
-        img = image.resize((224,224))
+        img = image.resize((240,240))
         img_array = np.array(img).astype(np.float32) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
 
@@ -181,7 +181,7 @@ with col2:
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.image(image.resize((224,224)), caption="Original")
+            st.image(image.resize((240,240)), caption="Original")
         with c2:
             st.image((cm.jet(saliency)[:, :, :3]), caption="Heatmap")
         with c3:
