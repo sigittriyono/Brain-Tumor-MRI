@@ -4,7 +4,6 @@ import cv2
 import onnxruntime as ort
 import gdown
 from PIL import Image
-import os
 from pathlib import Path
 
 MODEL_PATH = "model/brain_model.onnx"
@@ -22,93 +21,106 @@ def download_model():
 @st.cache_resource
 def load_model():
     model_path = download_model()
-    session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    session = ort.InferenceSession(model_path)
     return session
 
-def preprocess_image(image, target_size):
-    """Preprocess dengan exact model shape"""
-    image = cv2.resize(image, target_size)
+def preprocess_image(image):
+    """EXACT model format: [1, 240, 240, 3] NHWC"""
+    # Resize to 240x240
+    image = cv2.resize(image, (240, 240))
+    # Normalize 0-1
     image = image.astype(np.float32) / 255.0
-    # HWC -> CHW
-    image = np.transpose(image, (2, 0, 1))
+    # Add batch dimension -> [1, 240, 240, 3]
     image = np.expand_dims(image, axis=0)
     return image
 
 def predict(session, image):
-    input_meta = session.get_inputs()[0]
-    input_name = input_meta.name
-    input_shape = input_meta.shape
+    input_name = session.get_inputs()[0].name
+    input_shape = session.get_inputs()[0].shape
     
-    # Extract H,W dari [batch, channels, H, W]
-    target_size = (input_shape[2], input_shape[3])
+    st.info(f"🎯 Model expects: {input_shape}")
     
-    processed_image = preprocess_image(image, target_size)
+    # Preprocess EXACTLY as model expects
+    processed = preprocess_image(image)
+    st.info(f"📦 Input shape: {processed.shape}")
     
-    predictions = session.run(None, {input_name: processed_image.astype(np.float32)})[0]
-    return predictions, input_shape
+    predictions = session.run(None, {input_name: processed})[0]
+    return predictions
 
 def main():
-    st.title("🧠 Brain Tumor MRI Classifier")
-    st.markdown("**Fixed input shape untuk model 240x240**")
+    st.set_page_config(page_title="Brain Tumor MRI", layout="wide")
+    st.title("🧠 Brain Tumor Classifier")
     
+    # Load model
     try:
         session = load_model()
         input_shape = session.get_inputs()[0].shape
-        st.success(f"✅ Model loaded! Input: {input_shape}")
+        st.success(f"✅ Loaded! Model input: `[batch, {input_shape[1]}, {input_shape[2]}, {input_shape[3]}]`")
     except Exception as e:
         st.error(f"❌ {e}")
         st.stop()
     
-    # Sidebar
-    uploaded_file = st.sidebar.file_uploader("Upload MRI", type=['jpg','jpeg','png'])
-    
-    col1, col2 = st.columns([1,1])
+    # === UPLOAD ===
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        uploaded_file = st.file_uploader("📁 Upload MRI", type=['jpg', 'jpeg', 'png'])
     
     if uploaded_file:
         image = Image.open(uploaded_file)
-        image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        image_array = np.array(image)
+        
+        # Convert to BGR for cv2
+        if len(image_array.shape) == 3 and image_array.shape[2] == 3:
+            image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        else:
+            image_bgr = image_array
         
         with col1:
-            st.subheader("📸 Input Image")
+            st.subheader("📸 Original")
             st.image(image, use_column_width=True)
         
         with col2:
-            with st.spinner("🔍 Predicting..."):
-                predictions, model_shape = predict(session, image_cv)
+            st.subheader("🎯 Prediction")
+            
+            with st.spinner("Analyzing..."):
+                predictions = predict(session, image_bgr)
                 scores = np.softmax(predictions[0])
                 
-                class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
+                # Classes
+                classes = ['🦠 Glioma', '🎯 Meningioma', '✅ No Tumor', '🦋 Pituitary']
                 top_idx = np.argmax(scores)
-                confidence = scores[top_idx] * 100
+                confidence = scores[top_idx]
                 
-                st.subheader("🎯 Result")
-                result_color = "green" if top_idx == 2 else "red"
+                # RESULT
                 st.markdown(f"""
-                <h3 style="color:{'green' if top_idx==2 else 'red'};">
-                    **{class_names[top_idx]}**
-                </h3>
+                <div style='text-align:center; padding:20px; 
+                border-radius:10px; 
+                background-color:{'lightgreen' if top_idx==2 else '#ffcccc'}; 
+                border:3px solid {'green' if top_idx==2 else 'red'};'>
+                    <h2 style='margin:0; color:{'green' if top_idx==2 else 'red'}'>
+                        {classes[top_idx]}
+                    </h2>
+                    <h3 style='margin:10px 0 0 0; opacity:0.8'>
+                        Confidence: {confidence*100:.1f}%
+                    </h3>
+                </div>
                 """, unsafe_allow_html=True)
                 
-                st.metric("Confidence", f"{confidence:.1f}%")
-                
-                # Confidence chart
-                st.subheader("📊 Confidence Scores")
-                chart_data = {name: score*100 for name, score in zip(class_names, scores)}
+                # Bar chart
+                st.subheader("📊 All Probabilities")
+                chart_data = dict(zip([c.split()[1] for c in classes], scores*100))
                 st.bar_chart(chart_data)
                 
-                # Debug info
-                st.info(f"**Model shape**: {model_shape}")
-                st.info(f"**Processed shape**: {predictions.shape}")
+                # Debug
+                with st.expander("🔧 Debug Info"):
+                    st.json({
+                        "Model input shape": str(session.get_inputs()[0].shape),
+                        "Input data shape": str(predictions.shape),
+                        "Raw scores": {classes[i]: f"{s*100:.2f}%" for i,s in enumerate(scores)}
+                    })
     
     else:
-        st.info("👈 Upload MRI image to start!")
-        st.markdown("### 🧠 Expected Classes:")
+        st.info("👈 **Upload MRI scan** to classify!")
         st.markdown("""
-        - **Glioma**: Malignant brain tumor
-        - **Meningioma**: Meninges tumor  
-        - **No Tumor**: Normal
-        - **Pituitary**: Pituitary gland tumor
-        """)
-
-if __name__ == "__main__":
-    main()
+        ### 🎯 **4 Classes:**
+        
