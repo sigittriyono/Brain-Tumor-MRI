@@ -123,4 +123,5 @@ def main():
         st.info("👈 **Upload MRI scan** to classify!")
         st.markdown("""
         ### 🎯 **4 Classes:**
+        """)
         
