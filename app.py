@@ -35,11 +35,13 @@ def load_model():
     return session
 
 def preprocess_image(img_pil):
-    img_resized     = img_pil.resize(IMG_SIZE, Image.LANCZOS)
-    img_array       = np.array(img_resized, dtype=np.float32)
-    img_preprocessed= preprocess_input(img_array.copy())
-    img_batch       = np.expand_dims(img_preprocessed, axis=0)
-    return img_resized, img_array, img_preprocessed, img_batch
+    img_resized = img_pil.resize(IMG_SIZE, Image.LANCZOS)
+    img_array   = np.array(img_resized, dtype=np.float32)
+    img_array = img_array / 255.0
+    img_array = np.transpose(img_array, (2, 0, 1))
+    img_batch = np.expand_dims(img_array, axis=0)
+
+    return img_resized, img_array, img_batch
 
 def predict(model, img_batch):
     probs    = model.predict(img_batch, verbose=0)[0]
@@ -197,7 +199,7 @@ if uploaded_file is not None:
     img_pil = Image.open(uploaded_file).convert("RGB")
 
     # Preprocessing
-    img_resized, img_array, img_preprocessed, img_batch = preprocess_image(img_pil)
+    img_resized, img_array, img_batch = preprocess_image(img_pil)
 
     # Prediksi
     with st.spinner("🔍 Menganalisis gambar..."):
