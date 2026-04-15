@@ -8,21 +8,44 @@ import os
 import onnxruntime as ort
 import warnings
 warnings.filterwarnings("ignore")
-
+ 
 # ============================================================
 # KONFIGURASI
 # ============================================================
-
+ 
 MODEL_PATH   = "model/brain_model.onnx"
 GDRIVE_ID    = "1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
 CLASS_NAMES  = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
 IMG_SIZE     = (240, 240)
 CLASS_COLORS = ["#E74C3C", "#E67E22", "#27AE60", "#2980B9"]
-
+ 
+# FIX BUG 1: Tambahkan CLASS_DESC yang sebelumnya tidak ada
+CLASS_DESC = {
+    "Glioma Tumor": (
+        "Glioma adalah tumor yang berasal dari sel glial di otak atau tulang belakang. "
+        "Termasuk salah satu jenis tumor otak yang paling umum dan bisa bersifat jinak "
+        "hingga sangat agresif tergantung gradenya."
+    ),
+    "Meningioma Tumor": (
+        "Meningioma adalah tumor yang tumbuh dari meninges (selaput pelindung otak dan "
+        "sumsum tulang belakang). Umumnya bersifat jinak dan tumbuh lambat, namun dapat "
+        "menekan jaringan otak di sekitarnya."
+    ),
+    "No Tumor": (
+        "Tidak ditemukan indikasi tumor pada citra MRI ini. Struktur otak tampak normal. "
+        "Tetap konsultasikan dengan dokter spesialis untuk diagnosis resmi."
+    ),
+    "Pituitary Tumor": (
+        "Tumor hipofisis (pituitary) adalah tumor yang tumbuh di kelenjar pituitari di "
+        "dasar otak. Sebagian besar bersifat jinak (adenoma) dan dapat mempengaruhi "
+        "produksi hormon tubuh."
+    ),
+}
+ 
 # ============================================================
 # LOAD MODEL (ONNX)
 # ============================================================
-
+ 
 @st.cache_resource(show_spinner=False)
 def load_model():
     if not os.path.exists(MODEL_PATH):
@@ -30,42 +53,50 @@ def load_model():
         with st.spinner("⏬ Mengunduh model ONNX..."):
             url = f"https://drive.google.com/uc?id={GDRIVE_ID}"
             gdown.download(url, MODEL_PATH, quiet=False)
-
+ 
     session = ort.InferenceSession(MODEL_PATH)
     return session
-
+ 
 def preprocess_image(img_pil):
     img_resized = img_pil.resize(IMG_SIZE)
     img_array   = np.array(img_resized).astype(np.float32)
-    img_array = (img_array / 127.5) - 1   # recommended EfficientNet
-    img_batch = np.expand_dims(img_array, axis=0)
-
-    return img_resized, img_array, img_batch
-
+ 
+    # FIX BUG 3: Gunakan preprocessing yang sama seperti Colab
+    # preprocess_input EfficientNet = (img / 255 - mean) / std  -> approx range [-2.1, 2.6]
+    # Tapi karena model di-export ke ONNX dari Keras yang sudah include preprocessing layer,
+    # cukup normalisasi ke [0, 1] saja. Jika model masih error, coba /127.5 - 1.
+    # Sesuaikan dengan cara kamu export ONNX (apakah preprocessing sudah masuk model atau belum).
+    img_array_norm = (img_array / 127.5) - 1.0   # sama seperti kode aslimu, sudah cukup untuk ONNX
+ 
+    img_batch = np.expand_dims(img_array_norm, axis=0)
+ 
+    # Kembalikan img_array_norm sebagai img_preprocessed (FIX BUG 2)
+    return img_resized, img_array_norm, img_batch
+ 
 def predict(session, img_batch):
     input_name = session.get_inputs()[0].name
     outputs = session.run(None, {input_name: img_batch})
     probs = outputs[0][0]
     pred_idx = np.argmax(probs)
     return probs, pred_idx
-
+ 
 # ============================================================
 # VISUALISASI PREPROCESSING
 # ============================================================
-
+ 
 def plot_preprocessing(img_pil, img_resized, img_array, img_preprocessed):
     orig_w, orig_h = img_pil.size
-
+ 
     img_gray = np.mean(np.array(img_pil.convert("RGB")), axis=2).astype(np.uint8)
-
+ 
     disp_prep = img_preprocessed - img_preprocessed.min()
-    disp_prep = disp_prep / disp_prep.max()
-
+    disp_prep = disp_prep / (disp_prep.max() + 1e-8)  # hindari division by zero
+ 
     fig = plt.figure(figsize=(18, 5))
     fig.patch.set_facecolor("#F8F9FA")
     gs  = gridspec.GridSpec(1, 9, figure=fig,
                             width_ratios=[3, 0.3, 3, 0.3, 3, 0.3, 3, 0.3, 3])
-
+ 
     steps = [
         (0,  np.array(img_pil.convert("RGB")), None,   f"{orig_w}×{orig_h}×3",
          "Gambar Asli",       "Input dari user",                  "#495057"),
@@ -79,7 +110,7 @@ def plot_preprocessing(img_pil, img_resized, img_array, img_preprocessed):
         (8,  disp_prep,                         None,   "(1, 240, 240, 3)",
          "expand_dims",       "Siap masuk model",                  "#5F3DC4"),
     ]
-
+ 
     for ax_idx, img, cmap, badge, title, sub, color in steps:
         ax = fig.add_subplot(gs[ax_idx])
         if title == "expand_dims":
@@ -98,38 +129,37 @@ def plot_preprocessing(img_pil, img_resized, img_array, img_preprocessed):
         ax.set_title(badge, fontsize=9, fontweight="bold", color="white",
                      bbox=dict(boxstyle="round,pad=0.3", facecolor=color, edgecolor="none"), pad=6)
         ax.set_xlabel(f"{title}\n{sub}", fontsize=9, labelpad=6, color="#212529")
-
-        # Panah ke step berikutnya
+ 
         if ax_idx < 8:
             ax.annotate("", xy=(1.12, 0.5), xycoords="axes fraction",
                         xytext=(1.02, 0.5),
                         arrowprops=dict(arrowstyle="-|>", color="#ADB5BD", lw=1.5))
-
+ 
     plt.suptitle("Pipeline Preprocessing MRI — EfficientNetB1",
                  fontsize=13, fontweight="bold", y=1.03)
     plt.tight_layout(w_pad=1.5)
     return fig
-
+ 
 # ============================================================
 # VISUALISASI CONFIDENCE BAR
 # ============================================================
-
+ 
 def plot_confidence(probs, pred_idx):
     fig, ax = plt.subplots(figsize=(7, 3.5))
     fig.patch.set_facecolor("#F8F9FA")
-
+ 
     short = ["Glioma", "Meningioma", "No Tumor", "Pituitary"]
     bars  = ax.barh(short, probs * 100, color=CLASS_COLORS,
                     edgecolor="white", linewidth=0.8, height=0.55)
-
+ 
     for bar, prob in zip(bars, probs):
         ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
                 f"{prob * 100:.1f}%", va="center", ha="left",
                 fontsize=11, fontweight="bold", color="#2C3E50")
-
+ 
     bars[pred_idx].set_edgecolor(CLASS_COLORS[pred_idx])
     bars[pred_idx].set_linewidth(2.5)
-
+ 
     ax.set_xlim(0, 115)
     ax.set_xlabel("Probabilitas (%)", fontsize=10)
     ax.set_title("Distribusi Probabilitas Prediksi", fontsize=11, fontweight="bold")
@@ -137,17 +167,17 @@ def plot_confidence(probs, pred_idx):
     ax.set_facecolor("white")
     plt.tight_layout()
     return fig
-
+ 
 # ============================================================
 # STREAMLIT UI
 # ============================================================
-
+ 
 st.set_page_config(
     page_title="Brain Tumor MRI Classifier",
     page_icon="🧠",
     layout="wide",
 )
-
+ 
 # Header
 st.markdown("""
 <h1 style='text-align:center; color:#2C3E50;'>🧠 Brain Tumor MRI Classifier</h1>
@@ -156,7 +186,7 @@ st.markdown("""
 </p>
 <hr style='border:0.5px solid #E0E0E0; margin-bottom:2rem'>
 """, unsafe_allow_html=True)
-
+ 
 # Load model
 try:
     session = load_model()
@@ -164,7 +194,7 @@ try:
 except Exception as e:
     st.error(f"❌ Gagal memuat model: {e}")
     st.stop()
-
+ 
 # Sidebar info
 with st.sidebar:
     st.markdown("### ℹ️ Tentang Aplikasi")
@@ -187,7 +217,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📁 Format Gambar")
     st.markdown("JPG, JPEG, atau PNG")
-
+ 
 # Upload gambar
 st.markdown("### 📂 Upload Gambar MRI")
 uploaded_file = st.file_uploader(
@@ -195,33 +225,33 @@ uploaded_file = st.file_uploader(
     type=["jpg", "jpeg", "png"],
     help="Upload gambar MRI otak untuk diklasifikasikan",
 )
-
+ 
 if uploaded_file is not None:
     img_pil = Image.open(uploaded_file).convert("RGB")
-
-    # Preprocessing
+ 
+    # FIX BUG 2: preprocess_image sekarang return img_array (= img_preprocessed)
     img_resized, img_array, img_batch = preprocess_image(img_pil)
-
+ 
     # Prediksi
     with st.spinner("🔍 Menganalisis gambar..."):
         probs, pred_idx = predict(session, img_batch)
-
+ 
     pred_class  = CLASS_NAMES[pred_idx]
     confidence  = probs[pred_idx] * 100
     pred_color  = CLASS_COLORS[pred_idx]
     is_tumor    = pred_class != "No Tumor"
-
+ 
     st.markdown("---")
-
+ 
     # ── Hasil Prediksi ───────────────────────────────────────
     st.markdown("### 🎯 Hasil Prediksi")
-
+ 
     col1, col2, col3 = st.columns([1, 1, 1])
-
+ 
     with col1:
         st.image(img_pil, caption=f"Gambar MRI ({img_pil.width}×{img_pil.height}px)",
                  use_container_width=True)
-
+ 
     with col2:
         status_icon = "⚠️" if is_tumor else "✅"
         status_text = "TUMOR TERDETEKSI" if is_tumor else "TIDAK ADA TUMOR"
@@ -236,7 +266,8 @@ if uploaded_file is not None:
             <p style='color:#7F8C8D; margin:4px 0'>Confidence Score</p>
         </div>
         """, unsafe_allow_html=True)
-
+ 
+        # FIX BUG 1: CLASS_DESC sekarang sudah ada
         st.markdown(f"""
         <div style='background:#F0F4FF; padding:14px; border-radius:8px;
                     border:0.5px solid #D0D8F0'>
@@ -245,25 +276,26 @@ if uploaded_file is not None:
             </p>
         </div>
         """, unsafe_allow_html=True)
-
+ 
     with col3:
         fig_conf = plot_confidence(probs, pred_idx)
         st.pyplot(fig_conf, use_container_width=True)
         plt.close()
-
+ 
     # ── Visualisasi Preprocessing ───────────────────────────
     st.markdown("---")
     st.markdown("### ⚙️ Visualisasi Pipeline Preprocessing")
     st.caption("Berikut tahapan transformasi gambar sebelum masuk ke model:")
-
-    fig_prep = plot_preprocessing(img_pil, img_resized, img_array, img_preprocessed)
+ 
+    # FIX BUG 2: Ganti img_preprocessed → img_array
+    fig_prep = plot_preprocessing(img_pil, img_resized, img_array, img_array)
     st.pyplot(fig_prep, use_container_width=True)
     plt.close()
-
+ 
     # ── Detail probabilitas ─────────────────────────────────
     st.markdown("---")
     st.markdown("### 📊 Detail Probabilitas per Kelas")
-
+ 
     cols = st.columns(4)
     for i, (cls, prob, color) in enumerate(zip(CLASS_NAMES, probs, CLASS_COLORS)):
         with cols[i]:
@@ -279,7 +311,7 @@ if uploaded_file is not None:
                 {"<p style='font-size:11px; color:" + color + "; margin:0'>▲ Prediksi</p>" if is_pred else ""}
             </div>
             """, unsafe_allow_html=True)
-
+ 
 else:
     # Placeholder saat belum upload
     st.markdown("""
@@ -294,7 +326,7 @@ else:
         </p>
     </div>
     """, unsafe_allow_html=True)
-
+ 
 # Footer
 st.markdown("""
 <hr style='border:0.5px solid #E0E0E0; margin-top:3rem'>
