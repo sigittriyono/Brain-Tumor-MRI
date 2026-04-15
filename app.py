@@ -40,7 +40,7 @@ DISEASE_INFO = {
 MODEL_PATH = "brain_model.onnx"
 
 def download_model():
-    url = "https://drive.google.com/file/d/1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH/view?usp=sharing"
+    url = "https://drive.google.com/uc?id=1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
     with st.spinner("Mengunduh model..."):
         gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
 
