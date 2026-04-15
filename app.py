@@ -39,21 +39,31 @@ DISEASE_INFO = {
 # ─── Model ───────────────────────────────────────────────────
 MODEL_PATH = "brain_model.onnx"
 
+MODEL_PATH = "brain_model.onnx"
+
 def download_model():
     url = "https://drive.google.com/uc?id=1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
 
     if not os.path.exists(MODEL_PATH):
         with st.spinner("Mengunduh model..."):
             try:
-                output = gdown.download(url, MODEL_PATH, quiet=False)
-                
-                if output is None or not os.path.exists(MODEL_PATH):
-                    st.error("Download gagal. Cek link atau akses file.")
+                gdown.download(url, MODEL_PATH, quiet=False)
+
+                if not os.path.exists(MODEL_PATH):
+                    st.error("Model gagal didownload!")
                     st.stop()
 
             except Exception as e:
-                st.error(f"Gagal download model: {e}")
+                st.error(f"Error download: {e}")
                 st.stop()
+
+download_model()
+
+@st.cache_resource
+def load_model():
+    return ort.InferenceSession(MODEL_PATH)
+
+session = load_model()
 
 @st.cache_resource
 def load_model():
