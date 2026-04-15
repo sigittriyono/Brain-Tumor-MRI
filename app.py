@@ -41,11 +41,19 @@ MODEL_PATH = "brain_model.onnx"
 
 def download_model():
     url = "https://drive.google.com/uc?id=1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
-    with st.spinner("Mengunduh model..."):
-        gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
 
-if not os.path.exists(MODEL_PATH):
-    download_model()
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("Mengunduh model..."):
+            try:
+                output = gdown.download(url, MODEL_PATH, quiet=False)
+                
+                if output is None or not os.path.exists(MODEL_PATH):
+                    st.error("Download gagal. Cek link atau akses file.")
+                    st.stop()
+
+            except Exception as e:
+                st.error(f"Gagal download model: {e}")
+                st.stop()
 
 @st.cache_resource
 def load_model():
