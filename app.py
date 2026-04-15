@@ -94,7 +94,7 @@ def compute_saliency(session, img_array):
     return saliency
 
 def make_overlay(img, saliency):
-    img = np.array(img.resize((224,224)))
+    img = np.array(img.resize((240,240)))
     heatmap = (cm.jet(saliency)[:, :, :3] * 255).astype(np.uint8)
     overlay = cv2.addWeighted(img, 0.6, heatmap, 0.4, 0)
     return Image.fromarray(overlay)
