@@ -35,10 +35,9 @@ def load_model():
     return session
 
 def preprocess_image(img_pil):
-    img_resized = img_pil.resize(IMG_SIZE, Image.LANCZOS)
-    img_array   = np.array(img_resized, dtype=np.float32)
-    img_array = img_array / 255.0
-    img_array = np.transpose(img_array, (2, 0, 1))
+    img_resized = img_pil.resize(IMG_SIZE)
+    img_array   = np.array(img_resized).astype(np.float32)
+    img_array = (img_array / 127.5) - 1   # recommended EfficientNet
     img_batch = np.expand_dims(img_array, axis=0)
 
     return img_resized, img_array, img_batch
