@@ -43,8 +43,10 @@ def preprocess_image(img_pil):
 
     return img_resized, img_array, img_batch
 
-def predict(model, img_batch):
-    probs    = model.predict(img_batch, verbose=0)[0]
+def predict(session, img_batch):
+    input_name = session.get_inputs()[0].name
+    outputs = session.run(None, {input_name: img_batch})
+    probs = outputs[0][0]
     pred_idx = np.argmax(probs)
     return probs, pred_idx
 
@@ -158,7 +160,7 @@ st.markdown("""
 
 # Load model
 try:
-    model = load_model()
+    session = load_model()
     st.success("✅ Model berhasil dimuat!", icon="✅")
 except Exception as e:
     st.error(f"❌ Gagal memuat model: {e}")
@@ -203,7 +205,7 @@ if uploaded_file is not None:
 
     # Prediksi
     with st.spinner("🔍 Menganalisis gambar..."):
-        probs, pred_idx = predict(model, img_batch)
+        probs, pred_idx = predict(session, img_batch)
 
     pred_class  = CLASS_NAMES[pred_idx]
     confidence  = probs[pred_idx] * 100
