@@ -4,155 +4,111 @@ import cv2
 import onnxruntime as ort
 import gdown
 from PIL import Image
-import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 
-# Konfigurasi halaman
-st.set_page_config(
-    page_title="Brain Tumor MRI Classifier",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Paths
 MODEL_PATH = "model/brain_model.onnx"
 GDRIVE_ID = "1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
 
 @st.cache_resource
 def download_model():
-    """Download model dari Google Drive jika belum ada"""
     model_dir = Path("model")
     model_dir.mkdir(exist_ok=True)
-    
     if not Path(MODEL_PATH).exists():
-        with st.spinner("Downloading model dari Google Drive..."):
+        with st.spinner("📥 Downloading model..."):
             gdown.download(f"https://drive.google.com/uc?id={GDRIVE_ID}", MODEL_PATH, quiet=False)
     return MODEL_PATH
 
 @st.cache_resource
 def load_model():
-    """Load ONNX model"""
     model_path = download_model()
-    session = ort.InferenceSession(model_path)
+    session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
     return session
 
-def preprocess_image(image, img_size=(224, 224)):
-    """Preprocess gambar untuk model"""
-    # Resize
-    image = cv2.resize(image, img_size)
-    # Normalize ke 0-1
+def preprocess_image(image, target_size):
+    """Preprocess dengan exact model shape"""
+    image = cv2.resize(image, target_size)
     image = image.astype(np.float32) / 255.0
-    # Tambah dimension batch
+    # HWC -> CHW
+    image = np.transpose(image, (2, 0, 1))
     image = np.expand_dims(image, axis=0)
-    # Transpose ke CHW format (ONNX biasanya)
-    image = np.transpose(image, (0, 3, 1, 2))
     return image
 
 def predict(session, image):
-    """Lakukan prediksi"""
-    input_name = session.get_inputs()[0].name
-    input_shape = session.get_inputs()[0].shape
+    input_meta = session.get_inputs()[0]
+    input_name = input_meta.name
+    input_shape = input_meta.shape
     
-    processed_image = preprocess_image(image)
+    # Extract H,W dari [batch, channels, H, W]
+    target_size = (input_shape[2], input_shape[3])
     
-    # Pastikan shape sesuai
-    if len(processed_image.shape) == 4:
-        predictions = session.run(None, {input_name: processed_image.astype(np.float32)})[0]
-    else:
-        predictions = session.run(None, {input_name: processed_image[None].astype(np.float32)})[0]
+    processed_image = preprocess_image(image, target_size)
     
-    return predictions
+    predictions = session.run(None, {input_name: processed_image.astype(np.float32)})[0]
+    return predictions, input_shape
 
 def main():
     st.title("🧠 Brain Tumor MRI Classifier")
-    st.markdown("---")
+    st.markdown("**Fixed input shape untuk model 240x240**")
     
-    # Load model
     try:
-        with st.spinner("Loading model..."):
-            session = load_model()
-        st.success("✅ Model berhasil dimuat!")
+        session = load_model()
+        input_shape = session.get_inputs()[0].shape
+        st.success(f"✅ Model loaded! Input: {input_shape}")
     except Exception as e:
-        st.error(f"❌ Error loading model: {str(e)}")
+        st.error(f"❌ {e}")
         st.stop()
     
     # Sidebar
-    st.sidebar.header("📁 Upload Gambar")
-    uploaded_file = st.sidebar.file_uploader(
-        "Pilih file MRI (.jpg, .jpeg, .png)",
-        type=['jpg', 'jpeg', 'png'],
-        help="Upload gambar MRI otak"
-    )
+    uploaded_file = st.sidebar.file_uploader("Upload MRI", type=['jpg','jpeg','png'])
     
-    st.sidebar.header("ℹ️ Informasi")
-    st.sidebar.info("""
-    **Kelas Tumor:**
-    - **Glioma**: Tumor otak ganas
-    - **Meningioma**: Tumor selaput otak
-    - **Pituitary**: Tumor kelenjar pituitari
-    - **No Tumor**: Tidak ada tumor
+    col1, col2 = st.columns([1,1])
     
-    **Akurasi Model**: 98%+
-    """)
-    
-    # Main content
-    col1, col2 = st.columns([1, 1])
-    
-    if uploaded_file is not None:
-        # Tampilkan gambar asli
+    if uploaded_file:
         image = Image.open(uploaded_file)
         image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
         with col1:
-            st.subheader("📸 Gambar MRI")
+            st.subheader("📸 Input Image")
             st.image(image, use_column_width=True)
         
-        # Prediksi
-        with st.spinner("🔄 Memproses..."):
-            predictions = predict(session, image_cv)
-            scores = np.softmax(predictions[0])
-            
-            # Class names
-            class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
-            
-            # Hasil prediksi
-            top_idx = np.argmax(scores)
-            confidence = scores[top_idx] * 100
-            
-            with col2:
-                st.subheader("🎯 Hasil Prediksi")
+        with col2:
+            with st.spinner("🔍 Predicting..."):
+                predictions, model_shape = predict(session, image_cv)
+                scores = np.softmax(predictions[0])
                 
-                # Badge hasil
-                if top_idx == 2:  # No Tumor
-                    st.success(f"**{class_names[top_idx]}**")
-                else:
-                    st.error(f"**{class_names[top_idx]}**")
+                class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
+                top_idx = np.argmax(scores)
+                confidence = scores[top_idx] * 100
+                
+                st.subheader("🎯 Result")
+                result_color = "green" if top_idx == 2 else "red"
+                st.markdown(f"""
+                <h3 style="color:{'green' if top_idx==2 else 'red'};">
+                    **{class_names[top_idx]}**
+                </h3>
+                """, unsafe_allow_html=True)
                 
                 st.metric("Confidence", f"{confidence:.1f}%")
                 
-                # Bar chart
+                # Confidence chart
                 st.subheader("📊 Confidence Scores")
-                chart_data = dict(zip(class_names, scores * 100))
+                chart_data = {name: score*100 for name, score in zip(class_names, scores)}
                 st.bar_chart(chart_data)
                 
-                # Detail semua kelas
-                st.subheader("📋 Detail Semua Kelas")
-                for i, (cls, score) in enumerate(zip(class_names, scores)):
-                    st.write(f"**{cls}**: {score*100:.1f}%")
+                # Debug info
+                st.info(f"**Model shape**: {model_shape}")
+                st.info(f"**Processed shape**: {predictions.shape}")
     
     else:
-        # Placeholder gambar contoh
-        st.info("👈 Silahkan upload gambar MRI di sidebar untuk memulai!")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image("https://images.unsplash.com/photo-1588735374723-4f0515d4dcbe?w=400", 
-                    caption="Contoh MRI Normal")
-        with col2:
-            st.image("https://images.unsplash.com/photo-1629429843630-b7c6041f5906?w=400", 
-                    caption="Contoh MRI Tumor")
+        st.info("👈 Upload MRI image to start!")
+        st.markdown("### 🧠 Expected Classes:")
+        st.markdown("""
+        - **Glioma**: Malignant brain tumor
+        - **Meningioma**: Meninges tumor  
+        - **No Tumor**: Normal
+        - **Pituitary**: Pituitary gland tumor
+        """)
 
 if __name__ == "__main__":
     main()
