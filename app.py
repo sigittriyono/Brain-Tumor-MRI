@@ -11,117 +11,163 @@ GDRIVE_ID = "1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
 
 @st.cache_resource
 def download_model():
+    """Download model jika belum ada"""
     model_dir = Path("model")
     model_dir.mkdir(exist_ok=True)
+    
     if not Path(MODEL_PATH).exists():
-        with st.spinner("📥 Downloading model..."):
+        with st.spinner("📥 Downloading model dari Google Drive..."):
             gdown.download(f"https://drive.google.com/uc?id={GDRIVE_ID}", MODEL_PATH, quiet=False)
     return MODEL_PATH
 
 @st.cache_resource
 def load_model():
+    """Load ONNX model"""
     model_path = download_model()
-    session = ort.InferenceSession(model_path)
+    session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
     return session
 
 def preprocess_image(image):
-    """EXACT model format: [1, 240, 240, 3] NHWC"""
-    # Resize to 240x240
+    """Format: [1, 240, 240, 3] NHWC"""
     image = cv2.resize(image, (240, 240))
-    # Normalize 0-1
     image = image.astype(np.float32) / 255.0
-    # Add batch dimension -> [1, 240, 240, 3]
-    image = np.expand_dims(image, axis=0)
+    image = np.expand_dims(image, axis=0)  # [1, 240, 240, 3]
     return image
 
 def predict(session, image):
-    input_name = session.get_inputs()[0].name
-    input_shape = session.get_inputs()[0].shape
+    """Prediksi dengan debug info"""
+    input_meta = session.get_inputs()[0]
+    input_name = input_meta.name
+    input_shape = input_meta.shape
     
-    st.info(f"🎯 Model expects: {input_shape}")
-    
-    # Preprocess EXACTLY as model expects
     processed = preprocess_image(image)
-    st.info(f"📦 Input shape: {processed.shape}")
+    
+    st.info(f"**Model input**: {input_shape}")
+    st.info(f"**Processed**: {processed.shape}")
     
     predictions = session.run(None, {input_name: processed})[0]
     return predictions
 
 def main():
-    st.set_page_config(page_title="Brain Tumor MRI", layout="wide")
-    st.title("🧠 Brain Tumor Classifier")
+    st.set_page_config(
+        page_title="Brain Tumor MRI Classifier", 
+        page_icon="🧠",
+        layout="wide"
+    )
+    
+    st.title("🧠 Brain Tumor MRI Classifier")
+    st.markdown("Upload MRI scan untuk deteksi tumor otak")
     
     # Load model
     try:
-        session = load_model()
+        with st.spinner("Loading model..."):
+            session = load_model()
         input_shape = session.get_inputs()[0].shape
-        st.success(f"✅ Loaded! Model input: `[batch, {input_shape[1]}, {input_shape[2]}, {input_shape[3]}]`")
+        st.success(f"✅ Model siap! Input shape: {input_shape}")
     except Exception as e:
-        st.error(f"❌ {e}")
+        st.error(f"❌ Error: {str(e)}")
         st.stop()
     
-    # === UPLOAD ===
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        uploaded_file = st.file_uploader("📁 Upload MRI", type=['jpg', 'jpeg', 'png'])
+    # Sidebar info
+    with st.sidebar:
+        st.header("ℹ️ Info")
+        st.markdown("""
+        **Kelas:**
+        - 🦠 **Glioma** - Tumor ganas
+        - 🎯 **Meningioma** - Tumor selaput otak  
+        - ✅ **No Tumor** - Normal
+        - 🦋 **Pituitary** - Tumor kelenjar
+        
+        **Input**: 240x240 pixels
+        """)
     
-    if uploaded_file:
+    # Main content
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "📁 Upload MRI Image", 
+            type=['jpg', 'jpeg', 'png', 'JPG', 'PNG'],
+            help="Upload scan MRI otak"
+        )
+    
+    if uploaded_file is not None:
+        # Display image
         image = Image.open(uploaded_file)
         image_array = np.array(image)
         
-        # Convert to BGR for cv2
+        # BGR conversion
         if len(image_array.shape) == 3 and image_array.shape[2] == 3:
             image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
         else:
-            image_bgr = image_array
+            image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGBA2BGR) if image_array.shape[2] == 4 else image_array
         
-        with col1:
-            st.subheader("📸 Original")
-            st.image(image, use_column_width=True)
+        st.subheader("📸 Gambar Asli")
+        st.image(image, use_column_width=True)
         
+        # Prediction
         with col2:
-            st.subheader("🎯 Prediction")
+            st.subheader("🎯 Hasil Prediksi")
             
-            with st.spinner("Analyzing..."):
+            with st.spinner("🔍 Menganalisis..."):
                 predictions = predict(session, image_bgr)
                 scores = np.softmax(predictions[0])
                 
                 # Classes
-                classes = ['🦠 Glioma', '🎯 Meningioma', '✅ No Tumor', '🦋 Pituitary']
+                classes = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
                 top_idx = np.argmax(scores)
-                confidence = scores[top_idx]
+                confidence = scores[top_idx] * 100
                 
-                # RESULT
+                # Main result
+                result_emoji = "✅" if top_idx == 2 else "⚠️"
+                color = "green" if top_idx == 2 else "red"
+                
                 st.markdown(f"""
-                <div style='text-align:center; padding:20px; 
-                border-radius:10px; 
-                background-color:{'lightgreen' if top_idx==2 else '#ffcccc'}; 
-                border:3px solid {'green' if top_idx==2 else 'red'};'>
-                    <h2 style='margin:0; color:{'green' if top_idx==2 else 'red'}'>
-                        {classes[top_idx]}
-                    </h2>
-                    <h3 style='margin:10px 0 0 0; opacity:0.8'>
-                        Confidence: {confidence*100:.1f}%
-                    </h3>
+                <div style="text-align:center; padding:30px; margin:20px 0;
+                border-radius:15px; border:4px solid {color};
+                background: linear-gradient(145deg, {'#d4f4d4' if top_idx==2 else '#ffd4d4'}, white);">
+                    <h1 style="color:{color}; margin:0;">{result_emoji} {classes[top_idx]}</h1>
+                    <h2 style="color:{color}; margin:10px 0 0 0;">{confidence:.1f}% Confidence</h2>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 # Bar chart
-                st.subheader("📊 All Probabilities")
-                chart_data = dict(zip([c.split()[1] for c in classes], scores*100))
-                st.bar_chart(chart_data)
+                st.subheader("📊 Confidence Semua Kelas")
+                chart_data = dict(zip(classes, scores * 100))
+                st.bar_chart(chart_data, height=400)
+                
+                # Detail
+                st.subheader("📋 Detail Prediksi")
+                for i, (cls, score) in enumerate(zip(classes, scores)):
+                    col_a, col_b = st.columns([3,1])
+                    with col_a:
+                        st.write(f"**{cls}**")
+                    with col_b:
+                        st.metric("", f"{score*100:.1f}%")
                 
                 # Debug
                 with st.expander("🔧 Debug Info"):
                     st.json({
-                        "Model input shape": str(session.get_inputs()[0].shape),
-                        "Input data shape": str(predictions.shape),
-                        "Raw scores": {classes[i]: f"{s*100:.2f}%" for i,s in enumerate(scores)}
+                        "Model input": str(session.get_inputs()[0].shape),
+                        "Predictions shape": str(predictions.shape),
+                        "Top prediction": f"{classes[top_idx]} ({confidence:.2f}%)"
                     })
     
     else:
-        st.info("👈 **Upload MRI scan** to classify!")
-        st.markdown("""
-        ### 🎯 **4 Classes:**
-        """)
+        st.info("👈 **Upload file MRI** di sebelah kiri untuk mulai!")
         
+        # Example images
+        col_ex1, col_ex2 = st.columns(2)
+        with col_ex1:
+            st.image(
+                "https://images.unsplash.com/photo-1588735374723-4f0515d4dcbe?w=300", 
+                caption="Contoh: Normal"
+            )
+        with col_ex2:
+            st.image(
+                "https://images.unsplash.com/photo-1629429843630-b7c6041f5906?w=300", 
+                caption="Contoh: Tumor"
+            )
+
+if __name__ == "__main__":
+    main()
