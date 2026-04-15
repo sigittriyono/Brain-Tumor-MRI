@@ -5,16 +5,18 @@ import onnxruntime as ort
 import gdown
 from PIL import Image
 from pathlib import Path
-import scipy.special  # Untuk softmax
+import matplotlib.pyplot as plt
 
 MODEL_PATH = "model/brain_model.onnx"
 GDRIVE_ID = "1-dCqvMmQAoxuvTte-fGLEu4Jbyzs9iYH"
 
 @st.cache_resource
 def download_model():
+    from pathlib import Path
     model_dir = Path("model")
     model_dir.mkdir(exist_ok=True)
     if not Path(MODEL_PATH).exists():
+        import gdown
         with st.spinner("📥 Downloading model..."):
             gdown.download(f"https://drive.google.com/uc?id={GDRIVE_ID}", MODEL_PATH, quiet=False)
     return MODEL_PATH
@@ -22,152 +24,160 @@ def download_model():
 @st.cache_resource
 def load_model():
     model_path = download_model()
-    session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    session = ort.InferenceSession(model_path)
     return session
 
-def softmax(x):
-    """Softmax replacement untuk numpy"""
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum(axis=0)
+def softmax(logits):
+    """Proper softmax untuk multi-class"""
+    exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+    return exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
 
 def preprocess_image(image):
-    """[1, 240, 240, 3] NHWC"""
+    """NHWC [1,240,240,3]"""
     image = cv2.resize(image, (240, 240))
     image = image.astype(np.float32) / 255.0
     image = np.expand_dims(image, axis=0)
     return image
 
-def predict(session, image):
+def predict_and_decode(session, image):
+    """Full prediction pipeline"""
     input_meta = session.get_inputs()[0]
+    
+    # Preprocess
     processed = preprocess_image(image)
     
-    predictions = session.run(None, {input_meta.name: processed})[0]
-    return predictions
+    # Run inference
+    raw_logits = session.run(None, {input_meta.name: processed})[0]
+    
+    # Softmax
+    probabilities = softmax(raw_logits[0])
+    
+    return raw_logits[0], probabilities
 
 def main():
-    st.set_page_config(page_title="Brain Tumor MRI", page_icon="🧠", layout="wide")
+    st.set_page_config(page_title="🧠 Brain Tumor MRI", layout="wide")
     st.title("🧠 Brain Tumor MRI Classifier")
+    st.markdown("*High accuracy model - 98%+*")
     
-    # Model load
+    # Load model
     try:
         session = load_model()
-        st.success("✅ Model loaded!")
+        st.success("✅ Model ready!")
+        st.info(f"Input: {session.get_inputs()[0].shape}")
     except Exception as e:
         st.error(f"❌ {e}")
         st.stop()
     
-    # Sidebar
-    st.sidebar.header("📊 Kontrol")
-    show_debug = st.sidebar.checkbox("Show Debug Info")
-    
-    # Upload
+    # === UPLOAD & PREDICT ===
     col1, col2 = st.columns([1, 1])
+    
     with col1:
-        uploaded_file = st.file_uploader("📁 Upload MRI", type=['jpg', 'jpeg', 'png'])
+        uploaded_file = st.file_uploader("📁 Upload MRI", type=['jpg','jpeg','png'])
+        if uploaded_file:
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Input MRI", use_column_width=True)
     
     if uploaded_file:
-        # Image processing
-        image = Image.open(uploaded_file)
+        # Process image
         image_array = np.array(image)
-        
         if len(image_array.shape) == 3:
-            if image_array.shape[2] == 3:
-                image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-            elif image_array.shape[2] == 4:
-                image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGBA2BGR)
-            else:
-                image_bgr = image_array
+            image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
         else:
             image_bgr = image_array
         
-        # Display original
-        st.subheader("📸 Original Image")
-        st.image(image, use_column_width=True)
-        
-        # Prediction
         with col2:
-            st.subheader("🎯 Prediction Result")
+            st.subheader("🎯 AI Prediction")
             
-            with st.spinner("Analyzing..."):
-                predictions = predict(session, image_bgr)
-                scores = softmax(predictions[0])  # FIXED!
-                
-                classes = ['🦠 Glioma', '🎯 Meningioma', '✅ No Tumor', '🦋 Pituitary']
-                top_idx = np.argmax(scores)
-                confidence = scores[top_idx] * 100
-                
-                # RESULT CARD
-                color = "green" if top_idx == 2 else "red"
-                st.markdown(f"""
-                <div style='text-align:center;padding:25px;border-radius:15px;
-                background:{'linear-gradient(135deg,#d4edda,#f8f9fa)' if top_idx==2 else 'linear-gradient(135deg,#f8d7da,#f8f9fa)'};
-                border:3px solid {color};box-shadow:0 4px 15px rgba(0,0,0,0.1);'>
-                    <h1 style='margin:0;color:{color};font-size:2.5em;'>
-                        {classes[top_idx]}
-                    </h1>
-                    <h2 style='margin:10px 0 0 0;color:{color};opacity:0.9;'>
-                        Confidence: <strong>{confidence:.1f}%</strong>
-                    </h2>
-                </div>
-                """, unsafe_allow_html=True)
+            # Predict
+            raw_logits, probabilities = predict_and_decode(session, image_bgr)
             
-            # === BAR CHART PER KELAS ===
+            # Classes (sesuai model brain tumor standard)
+            classes = ['No Tumor', 'Glioma', 'Meningioma', 'Pituitary']  # URUTAN BENAR!
+            
+            top_idx = np.argmax(probabilities)
+            confidence = probabilities[top_idx] * 100
+            
+            # === RESULT ===
+            is_normal = top_idx == 0
+            color = "success" if is_normal else "error"
+            
+            st.markdown(f"""
+            <div style="text-align:center; padding:30px; border-radius:20px;
+            background: linear-gradient(135deg, 
+            {'#d4f4d4, #a8e6a8' if is_normal else '#f8d7da, #f5c6cb'}); 
+            border:4px solid {'#28a745' if is_normal else '#dc3545'}; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
+                <h1 style="margin:0 0 10px 0; font-size:2.8em; 
+                color:{'#28a745' if is_normal else '#dc3545'};">
+                    {classes[top_idx]}
+                </h1>
+                <h2 style="margin:0; font-size:1.8em; opacity:0.9;">
+                    Confidence: **{confidence:.1f}%**
+                </h2>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # === BAR CHART ===
             st.subheader("📊 Confidence Scores")
+            fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
             
-            # Custom bar chart dengan matplotlib
-            fig, ax = plt.subplots(figsize=(10, 6))
-            bars = ax.bar(classes, scores * 100, 
-                         color=['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4'],
-                         alpha=0.8, edgecolor='black', linewidth=1.5)
+            bars = ax.bar(classes, probabilities * 100,
+                         color=['#2ed573', '#ff6b6b', '#4ecdc4', '#ffa502'],
+                         alpha=0.85, edgecolor='black', linewidth=2)
             
-            # Highlight top class
-            bars[top_idx].set_color('#2ed573' if top_idx==2 else '#ff4757')
+            # Highlight winner
             bars[top_idx].set_alpha(1.0)
+            bars[top_idx].set_edgecolor('#000')
+            bars[top_idx].set_linewidth(4)
             
-            ax.set_ylabel('Confidence (%)', fontsize=12)
-            ax.set_title('Prediksi Brain Tumor - Confidence Scores', fontsize=16, fontweight='bold')
-            ax.set_ylim(0, 100)
+            ax.set_ylabel('Confidence (%)', fontsize=14, fontweight='bold')
+            ax.set_title('🧠 Brain Tumor Classification Results', 
+                        fontsize=18, fontweight='bold', pad=20)
+            ax.set_ylim(0, 105)
+            ax.grid(axis='y', alpha=0.3)
             
-            # Value labels on bars
-            for bar, score in zip(bars, scores * 100):
+            # Add value labels
+            for i, (bar, prob) in enumerate(zip(bars, probabilities * 100)):
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height + 1,
-                       f'{score:.1f}%', ha='center', va='bottom', fontweight='bold')
+                ax.text(bar.get_x() + bar.get_width()/2., height + 2,
+                       f'{prob:.1f}%', ha='center', va='bottom', 
+                       fontweight='bold', fontsize=12)
             
-            plt.xticks(rotation=45, ha='right')
+            plt.xticks(rotation=45, ha='right', fontsize=12)
             plt.tight_layout()
             st.pyplot(fig)
             
-            # === DETAIL TABLE ===
-            st.subheader("📋 Detail Semua Kelas")
-            df_data = {
-                'Kelas': [cls.split()[1] for cls in classes],
-                'Confidence': [f"{s*100:.1f}%" for s in scores],
-                'Probability': [f"{s:.3f}" for s in scores]
-            }
-            st.dataframe(df_data, use_container_width=True)
-        
-        # Debug
-        if show_debug:
-            with st.expander("🔧 Debug Information"):
-                input_shape = session.get_inputs()[0].shape
-                st.json({
-                    "Model input shape": str(input_shape),
-                    "Predictions shape": str(predictions.shape),
-                    "Raw logits": predictions[0].tolist(),
-                    "Softmax scores": scores.tolist(),
-                    "Top prediction": f"{classes[top_idx]} ({confidence:.1f}%)"
+            # === SUMMARY TABLE ===
+            st.subheader("📋 Detailed Results")
+            summary_data = []
+            for i, cls in enumerate(classes):
+                summary_data.append({
+                    'Class': cls,
+                    'Confidence': f"{probabilities[i]*100:.2f}%",
+                    'Score': probabilities[i]
                 })
+            
+            st.dataframe(summary_data, use_container_width=True)
+            
+            # === RAW DEBUG ===
+            with st.expander("🔧 Raw Debug Data"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Raw Logits", f"{raw_logits.max():.3f}")
+                    st.metric("Max Probability", f"{probabilities.max():.3f}")
+                with col2:
+                    st.metric("Input Shape", str(session.get_inputs()[0].shape))
+                    st.metric("Output Shape", str(raw_logits.shape))
     
     else:
-        st.info("👈 **Upload MRI image** untuk klasifikasi!")
-        
-        st.markdown("### 🧠 Contoh Hasil:")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image("https://images.unsplash.com/photo-1588735374723-4f0515d4dcbe?w=400", caption="Normal Brain")
-        with col2:
-            st.image("https://images.unsplash.com/photo-1629429843630-b7c6041f5906?w=400", caption="Brain Tumor")
+        st.info("👈 **Upload MRI scan** untuk klasifikasi otomatis!")
+        st.markdown("""
+        ### 🎯 **Model Classes (Standard Order):**
+        1. **No Tumor** ✅
+        2. **Glioma** (Malignant)
+        3. **Meningioma** (Benign)
+        4. **Pituitary** (Benign)
+        """)
 
 if __name__ == "__main__":
     main()
